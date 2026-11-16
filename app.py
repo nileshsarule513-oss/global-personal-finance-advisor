@@ -40,18 +40,83 @@ def retrieve(q,category=None,k=5):
     result=col.query(**args)
     return [{"text":d,**m} for d,m in zip(result["documents"][0],result["metadatas"][0])]
 
-def rag(q,category=None):
-    sensitive=["tax rate","tax deduction","tax filing","tax bracket","tax law","regulation","tax liability"]
-    if country=="ALL" and any(x in q.lower() for x in sensitive):
-        return "Select a country for jurisdiction-specific information.",[]
-    docs=retrieve(q,category)
-    if not docs: return "No relevant evidence found for this jurisdiction/topic.",[]
-    if not api_key: return "Enter Gemini API key in the sidebar.",[]
-    context="\\n\\n".join([f"Source {d.get('source')} | Publisher {d.get('publisher')} | Country {d.get('country')} | Page {d.get('page')}\\n{d['text']}" for d in docs])
-    prompt=f"You are an educational global finance assistant. Do not mix jurisdictions or invent laws/rates/returns. Disclose missing evidence. No personalized buy/sell advice. Context:\\n{context}\\nQuestion: {q}\\nCite filenames and pages."
-    answer=genai.Client(api_key=api_key).models.generate_content(model=model,contents=prompt,config={"temperature":0.2}).text or ""
-    refs=[{"source":d.get("source"),"publisher":d.get("publisher"),"country":d.get("country"),"page":d.get("page")} for d in docs]
-    return answer,refs
+
+def rag(q, category=None):
+    sensitive = [
+        "tax rate", "tax deduction", "tax filing",
+        "tax bracket", "tax law", "regulation",
+        "tax liability"
+    ]
+
+    if country == "ALL" and any(x in q.lower() for x in sensitive):
+        return "Select a country for jurisdiction-specific information.", []
+
+    docs = retrieve(q, category)
+
+    if not docs:
+        return "No relevant evidence found for this jurisdiction/topic.", []
+
+    if not api_key:
+        return "Gemini API key is missing. Please configure it in Streamlit Secrets.", []
+
+    # Build context from retrieved documents
+    context = "\n\n".join([
+        f"Source: {d.get('source')} | "
+        f"Publisher: {d.get('publisher')} | "
+        f"Country: {d.get('country')} | "
+        f"Page: {d.get('page')}\n{d['text']}"
+        for d in docs
+    ])
+
+    prompt = f"""
+You are an educational global finance assistant.
+
+Instructions:
+- Do not mix financial rules from different countries.
+- Do not invent laws, tax rates, interest rates or investment returns.
+- Clearly disclose when evidence is missing.
+- Do not provide personalized buy/sell recommendations.
+- Use the supplied documents as your primary evidence.
+- Cite document filenames and page numbers where available.
+
+Retrieved context:
+{context}
+
+User question:
+{q}
+"""
+
+    refs = [
+        {
+            "source": d.get("source"),
+            "publisher": d.get("publisher"),
+            "country": d.get("country"),
+            "page": d.get("page")
+        }
+        for d in docs
+    ]
+
+    try:
+        # Keep the Gemini client alive throughout the API request.
+        with genai.Client(api_key=api_key) as client:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config={"temperature": 0.2}
+            )
+
+        answer = response.text or "Gemini returned an empty response."
+        return answer, refs
+
+    except Exception as e:
+        st.error(
+            f"Gemini API error: {type(e).__name__}: {e}"
+        )
+        return (
+            "Sorry, I could not generate an answer. "
+            "Please check your Gemini API configuration and try again."
+        ), refs
+
 
 def emi_calc(p,rate,months):
     if p<=0 or months<=0 or rate<0: raise ValueError("Invalid loan inputs")
