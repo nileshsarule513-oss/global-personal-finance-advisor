@@ -1,3 +1,4 @@
+import time
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -96,26 +97,54 @@ User question:
         for d in docs
     ]
 
+   
     try:
-        # Keep the Gemini client alive throughout the API request.
         with genai.Client(api_key=api_key) as client:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config={"temperature": 0.2}
-            )
+            response = None
+
+            # Retry temporary Gemini server overloads
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config={"temperature": 0.2}
+                    )
+                    break
+
+                except Exception as e:
+                    error_text = str(e)
+
+                    is_overloaded = (
+                        "503" in error_text
+                        or "UNAVAILABLE" in error_text
+                    )
+
+                    if not is_overloaded or attempt == 2:
+                        raise
+
+                    wait_seconds = 3 * (2 ** attempt)
+                    st.warning(
+                        f"Gemini is busy. Retrying in {wait_seconds} seconds..."
+                    )
+                    time.sleep(wait_seconds)
 
         answer = response.text or "Gemini returned an empty response."
         return answer, refs
 
     except Exception as e:
-        st.error(
-            f"Gemini API error: {type(e).__name__}: {e}"
-        )
-        return (
-            "Sorry, I could not generate an answer. "
-            "Please check your Gemini API configuration and try again."
-        ), refs
+        error_text = str(e)
+
+        if "503" in error_text or "UNAVAILABLE" in error_text:
+            return (
+                "Gemini is temporarily overloaded. "
+                "Please try again in a few minutes.",
+                refs
+            )
+
+        st.error(f"Gemini API error: {type(e).__name__}: {e}")
+        return "Unable to generate an answer. Please try again.", refs
+
 
 
 def emi_calc(p,rate,months):
